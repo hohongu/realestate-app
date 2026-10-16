@@ -1,21 +1,69 @@
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
+import PropertyForm from '../components/PropertyForm'
 
-// 表示用のダミー物件データ
-const PROPERTIES = [
-  { id: 1, name: 'グランドメゾン渋谷', rent: 185000, area: '東京都渋谷区' },
-  { id: 2, name: 'パークハイツ新宿', rent: 142000, area: '東京都新宿区' },
-  { id: 3, name: 'シティコート横浜', rent: 98000, area: '神奈川県横浜市' },
-  { id: 4, name: 'リバーサイド大阪', rent: 86000, area: '大阪府大阪市' },
-  { id: 5, name: 'サンライズ名古屋', rent: 74000, area: '愛知県名古屋市' },
-  { id: 6, name: 'ベイサイド福岡', rent: 68000, area: '福岡県福岡市' },
-]
-
-// 物件一覧画面（ログイン必須）
+// 物件一覧画面（ログイン必須）。一覧表示・登録・編集・削除を行う
 export default function Properties() {
   const { user } = useAuth()
   const navigate = useNavigate()
+  const [properties, setProperties] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  // フォーム表示状態: null=非表示 / 'new'=新規登録 / 物件オブジェクト=編集対象
+  const [formTarget, setFormTarget] = useState(null)
+
+  // 物件一覧を取得する（RLSにより自分の物件のみ返る）
+  const fetchProperties = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('properties')
+      .select('*')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      setError(`物件の取得に失敗しました: ${error.message}`)
+    } else {
+      setProperties(data)
+    }
+    setLoading(false)
+  }, [])
+
+  useEffect(() => {
+    fetchProperties()
+  }, [fetchProperties])
+
+  // 新規登録または更新を行う
+  const handleSave = async (values) => {
+    setError('')
+    const isEdit = formTarget !== 'new'
+
+    // 更新時は id で対象を絞る。登録時の user_id はDB側で自動設定される
+    const { error } = isEdit
+      ? await supabase.from('properties').update(values).eq('id', formTarget.id)
+      : await supabase.from('properties').insert(values)
+
+    if (error) {
+      setError(`保存に失敗しました: ${error.message}`)
+      return
+    }
+    setFormTarget(null)
+    await fetchProperties()
+  }
+
+  // 物件を削除する
+  const handleDelete = async (property) => {
+    if (!window.confirm(`「${property.name}」を削除しますか？`)) return
+    setError('')
+
+    const { error } = await supabase.from('properties').delete().eq('id', property.id)
+
+    if (error) {
+      setError(`削除に失敗しました: ${error.message}`)
+      return
+    }
+    await fetchProperties()
+  }
 
   // ログアウトしてログイン画面へ戻る
   const handleLogout = async () => {
@@ -35,15 +83,45 @@ export default function Properties() {
         </div>
       </header>
 
-      <ul className="card-list">
-        {PROPERTIES.map((p) => (
-          <li key={p.id} className="card">
-            <h2>{p.name}</h2>
-            <p className="rent">¥{p.rent.toLocaleString()} / 月</p>
-            <p className="area">{p.area}</p>
-          </li>
-        ))}
-      </ul>
+      {error && <p className="error">{error}</p>}
+
+      {formTarget ? (
+        // key を変えて、編集対象が変わったときにフォームの入力値を初期化する
+        <PropertyForm
+          key={formTarget === 'new' ? 'new' : formTarget.id}
+          initial={formTarget === 'new' ? null : formTarget}
+          onSubmit={handleSave}
+          onCancel={() => setFormTarget(null)}
+        />
+      ) : (
+        <button className="add-button" onClick={() => setFormTarget('new')}>
+          ＋ 物件を登録
+        </button>
+      )}
+
+      {loading ? (
+        <p className="message">読み込み中...</p>
+      ) : properties.length === 0 ? (
+        <p className="message">登録された物件はありません。</p>
+      ) : (
+        <ul className="card-list">
+          {properties.map((p) => (
+            <li key={p.id} className="card">
+              <h2>{p.name}</h2>
+              <p className="rent">¥{p.rent.toLocaleString()} / 月</p>
+              <p className="area">
+                {p.area}・{p.floor_plan}
+              </p>
+              <div className="card-actions">
+                <button onClick={() => setFormTarget(p)}>編集</button>
+                <button className="danger" onClick={() => handleDelete(p)}>
+                  削除
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
